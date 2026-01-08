@@ -6,10 +6,10 @@ to work with NumPy generators which are set as default on import.
 
 ### Update
 
-Run the following script to update UNU.RAN's version (The current version used is 1.8.1):
+Run the following script to update UNU.RAN's version (The current version used is 1.9.0):
 
 ```shell
-python get_and_clean_unuran.py -v --unuran-version 1.8.1
+python get_and_clean_unuran.py -v --unuran-version 1.9.0
 ```
 
 Replace the version number after `--unuran-version` to update.
