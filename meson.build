@@ -1,7 +1,11 @@
 project(
   'unuran',
-  version: '1.9.0',
+  'c',
+  version: '1.11.0',
 )
+
+cc = meson.get_compiler('c')
+libm = cc.find_library('m', required: true)
 
 # NOTE: scipy relies on these variable names when vendoring,
 # do not change them without updating scipy
@@ -214,3 +218,13 @@ unuran_defines = [
   '-D_ISOC99_SOURCE=1',
   '-DHAVE_DECL_HYPOT=1'
 ]
+
+unuran_lib = library(
+  'unuran',
+  unuran_sources,
+  include_directories: unuran_include_dirs,
+  c_args: unuran_defines,
+  dependencies: libm,
+  install: true,
+)
+
