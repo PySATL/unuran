@@ -5,7 +5,9 @@ project(
 )
 
 cc = meson.get_compiler('c')
-libm = cc.find_library('m', required: true)
+is_windows = host_machine.system() == 'windows'
+libm = cc.find_library('m', required: not is_windows)
+
 
 # NOTE: scipy relies on these variable names when vendoring,
 # do not change them without updating scipy
@@ -219,7 +221,7 @@ unuran_defines = [
   '-DHAVE_DECL_HYPOT=1'
 ]
 
-unuran_lib = library(
+unuran_lib = both_libraries(
   'unuran',
   unuran_sources,
   include_directories: unuran_include_dirs,

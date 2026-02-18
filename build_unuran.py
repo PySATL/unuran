@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import logging
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -23,9 +24,20 @@ def run_cmd(cmd: list[str]) -> None:
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
 
+def _normalize_line_endings(unuran_dir: Path) -> None:
+    logger = logging.getLogger("unuran-build")
+    try:
+        from get_and_clean_unuran import _normalize_line_endings as normalize  # type: ignore
+    except ImportError:
+        logger.warning("Unable to import _normalize_line_endings; skipping normalization.")
+        return
+
+    normalize(logger)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run get_and_clean_unuran.py, meson setup, and meson compile."
+        description="Run get_and_clean_unuran.py, normalize sources, and run Meson."
     )
     parser.add_argument(
         "--unuran-version",

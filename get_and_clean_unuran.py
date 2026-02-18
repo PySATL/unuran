@@ -1,11 +1,10 @@
-"""Download the UNU.RAN library and clean it for use in SciPy."""
+"""Download the UNU.RAN library and clean it for use in PySATL."""
 
 import os
 import re
 import argparse
 import gzip
 import logging
-import pkg_resources
 import pathlib
 import platform
 import urllib.request
@@ -14,15 +13,20 @@ import tarfile
 import zipfile
 import tempfile
 import datetime
-from typing import Tuple, List
 
 logging.basicConfig()
+logger = logging.getLogger("get-and-clean-unuran")
 
+def _normalize_version(tag: str) -> str:
+    match = re.match(r"\d+(?:\.\d+)*", tag.strip())
+    if not match:
+        raise ValueError(f"Unsupported UNU.RAN version string: {tag!r}")
+    return match.group(0)
 
-def _download_unuran(version: str, logger: logging.Logger) -> None:
+def _download_unuran(version: str) -> None:
     # base is where this script is located
     base = pathlib.Path(__file__).parent
-    UNURAN_VERSION = pkg_resources.parse_version(version).base_version
+    UNURAN_VERSION = _normalize_version(version)
     archive_name = f"unuran-{UNURAN_VERSION}"
     suffix = "tar.gz"
 
@@ -40,239 +44,153 @@ def _download_unuran(version: str, logger: logging.Logger) -> None:
         if is_win32 and UNURAN_VERSION in winversions[2:]:
             archive_name += "32"
         suffix = "zip"
-
+    
     # download url
     url = f"http://statmath.wu.ac.at/src/{archive_name}.{suffix}"
 
     # Start download
     logger.info(f" Downloading UNU.RAN version {UNURAN_VERSION} from {url}")
     start = datetime.datetime.now()
+    
     with urllib.request.urlopen(url) as response:
-        # Uncompress .tar.gz files before extracting.
         if suffix == "tar.gz":
             with gzip.GzipFile(fileobj=response) as uncompressed, tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as ntf:
                 logger.info(f" Saving UNU.RAN tarball to {ntf.name}")
                 shutil.copyfileobj(uncompressed, ntf)
-                ntf.flush()
+                ntf_path = ntf.name
+            
+            logger.info(" Starting to extract tar.gz")
+            with tempfile.TemporaryDirectory() as tmpdir:
+                dst = pathlib.Path(tmpdir)
+                with tarfile.open(ntf_path, "r") as tar:
+                    tar.extractall(path=dst)
+                
+                if (base / "unuran").exists():
+                    shutil.rmtree(base / "unuran")
+                shutil.move(dst / archive_name, base / "unuran")
+            os.remove(ntf_path)
+            
+        else:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                dst = pathlib.Path(tmpdir)
+                with zipfile.ZipFile(response, "r") as zip_ref:
+                    zip_ref.extractall(path=dst)
+                if (base / "unuran").exists():
+                    shutil.rmtree(base / "unuran")
+                shutil.move(dst / archive_name, base / "unuran")
 
-        # uncompressing finished
-        logger.info(f" Finished downloading (and uncompressing) in {datetime.datetime.now() - start}")
+    logger.info(f" Finished download and extraction in {datetime.datetime.now() - start}")
 
-        # Start extraction
-        logger.info(" Starting to extract")
-        start = datetime.datetime.now()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # temporary destination for extracted files.
-            dst = pathlib.Path(tmpdir)
+    # Cleanup unwanted files/dirs
+    unuran_dir = base / "unuran"
+    files_to_move = [("README", "UNURAN_README.txt"), ("README.win32", "UNURAN_README_win32.txt"),
+                     ("ChangeLog", "UNURAN_ChangeLog"), ("AUTHORS", "UNURAN_AUTHORS")]
+    for src, target in files_to_move:
+        if (unuran_dir / src).exists():
+            shutil.move(unuran_dir / src, base / target)
 
-            # use tarfile for .tar tarball
-            if suffix == "tar.gz":
-                try:
-                    with tarfile.open(ntf.name, "r") as tar:
-                        def is_within_directory(directory, target):
-                            
-                            abs_directory = os.path.abspath(directory)
-                            abs_target = os.path.abspath(target)
-                        
-                            prefix = os.path.commonprefix([abs_directory, abs_target])
-                            
-                            return prefix == abs_directory
-                        
-                        def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
-                        
-                            for member in tar.getmembers():
-                                member_path = os.path.join(path, member.name)
-                                if not is_within_directory(path, member_path):
-                                    raise Exception("Attempted Path Traversal in Tar File")
-                        
-                            tar.extractall(path, members, numeric_owner=numeric_owner) 
-                            
-                        
-                        safe_extract(tar, path=dst)
-                finally:
-                    # We want to save the tar file as a temporary file and simulataneously
-                    # extract it, meaning it will need to be opened in a context manager
-                    # multiple times. While Linux can handle nested context managers
-                    # using the same file handle, Windows cannot.  So we have to mark the
-                    # temporary file "ntf" as delete=False, close its context manager, and
-                    # then ensure cleanup happens in this "finally" statement
-                    ntf.close()
-            # handle zip files on windows
-            else:
-                with zipfile.ZipFile(response, "r") as zip:
-                    zip.extractall(path=dst)
-            logger.info(f" Finished extracting to {dst / archive_name} in {datetime.datetime.now() - start}")
+    dirs_to_remove = ["src/uniform", "autoconf", "tests", "doc", "examples", "experiments", "scripts"]
+    for d in dirs_to_remove:
+        if (unuran_dir / d).exists():
+            shutil.rmtree(unuran_dir / d)
 
-            # if "unuran" directory already exists, remove it.
-            if (base / "unuran").exists():
-                shutil.rmtree(base / "unuran")
-            shutil.move(dst / archive_name, base / "unuran")
-
-        # These files are moved to the rood directory.
-        files_to_move: List[Tuple[str, str]] = [
-            ("README", "UNURAN_README.txt"),
-            ("README.win32", "UNURAN_README_win32.txt"),
-            ("ChangeLog", "UNURAN_ChangeLog"),
-            ("AUTHORS", "UNURAN_AUTHORS"),
-            ("THANKS", "UNURAN_THANKS"),
-        ]
-        for file_to_move in files_to_move:
-            if (base / "unuran" / file_to_move[0]).exists():
-                shutil.move(base / "unuran" / file_to_move[0], base / file_to_move[1])
-
-        # Unwanted directories.
-        dirs_to_remove = ["src/uniform", "autoconf", "tests", "doc", "examples", "experiments", "scripts"]
-        for dir_to_remove in dirs_to_remove:
-            if (base / "unuran" / dir_to_remove).exists():
-                shutil.rmtree(base / "unuran" / dir_to_remove)
-
-        # Unwanted files.
-        files_to_remove = ["src/unuran.h.in", "acinclude.m4", "aclocal.m4", "autogen.sh", "configure",
-                           "COPYING", "INSTALL", "NEWS", "UPGRADE", "src/specfunct/log1p.c"]
-        for file_to_remove in files_to_remove:
-            if (base / "unuran" / file_to_remove).exists():
-                os.remove(base / "unuran" / file_to_remove)
-
-
-def _clean_makefiles(logger: logging.Logger) -> None:
-    # Remove unwanted Makefiles.
+def _clean_makefiles() -> None:
     logger.info(" Removing Makefiles")
     base = pathlib.Path(__file__).parent / "unuran"
-    # remove Makefiles from all the directories under unuran.
-    dirs = ["./Makefile*", "./*/Makefile*", "./*/*/Makefile*"]
-    for dir in dirs:
-        for p in base.glob(dir):
-            logger.info(f"     Removing {str(p)}")
-            p.unlink()
-    logger.info(" Complete")
+    for p in base.rglob("Makefile*"):
+        p.unlink()
 
+def _normalize_line_endings() -> None:
+    logger.info(" Normalizing line endings to LF")
+    base = pathlib.Path(__file__).parent / "unuran"
+    extensions = {".c", ".h", ".ch", ".txt", ".md", ".in", ".am"}
+    for path in base.rglob("*"):
+        if path.is_file() and path.suffix.lower() in extensions:
+            data = path.read_bytes()
+            normalized = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            if normalized != data:
+                path.write_bytes(normalized)
 
-def _clean_deprecated(logger: logging.Logger) -> None:
-    # Remove deprecated files
-    # This needs to be done in 2 steps:
-    #   1. Remove the deprecated files.
-    #   2. Remove their declaration from unuran.h
+def _clean_deprecated() -> None:
     logger.info(" Removing deprecated files")
     base = pathlib.Path(__file__).parent / "unuran"
     for p in base.glob("./*/*/deprecated*"):
-        logger.info(f"     Removing {str(p)}")
         p.unlink()
-    with open(base / "src" / "unuran.h", "rb") as f:
-        # Some files contain non utf-8 characters. Ignore them.
-        content = f.read().decode("utf-8", "ignore")
+    
+    unuran_h = base / "src" / "unuran.h"
+    if unuran_h.exists():
+        content = unuran_h.read_text(encoding="utf-8", errors="ignore")
+        content = re.sub(r"/\* <1> `deprecated_(.*).h\' \*/(.|\n)*/\* end of `deprecated_(.*).h\' \*/",
+                         r"/* Removed `deprecated_\1.h' */", content)
+        unuran_h.write_text(content, encoding="utf-8", newline="\n")
 
-    # All the declaration must match this regular expression:
-    # /* <1> `deprecated_*.h' */
-    # ... (declarations)
-    # /* end of `deprecated_*.h' */
-    # So, we can use re.sub to remove all deprecated declarations from unuran.h
-    content = re.sub(r"/\* <1> `deprecated_(.*).h\' \*/(.|\n)*/\* end of `deprecated_(.*).h\' \*/",
-                     r"/* Removed `deprecated_\1.h' for use in SciPy */", content)
-    with open(base / "src" / "unuran.h", "w") as f:
-        f.write(content)
-    logger.info(" Complete")
-
-
-def _ch_to_h(logger: logging.Logger) -> None:
-    # Rename .ch files
-    # We also need to edit all the sources under that directory
-    # to use the .h files instead of .ch files.
-    logger.info(" Renaming `.ch` -> `.h`")
+def _ch_to_h() -> None:
+    """Rename .ch to .h and update all includes in one pass."""
+    logger.info(" Renaming `.ch` -> `.h` and updating includes")
     base = pathlib.Path(__file__).parent / "unuran"
-    for p in base.glob("./*/*/*.ch"):
-        logger.info(f'     Renaming {str(p):30s} -> {str(p.parent / p.name[:-2]) + "h":30s}')
+    
+    # 1. Rename all .ch files to .h
+    for p in base.rglob("*.ch"):
+        new_path = p.with_suffix(".h")
+        p.rename(new_path)
 
-        # `.ch` --> `.h`
-        p.rename(p.parent / (p.name[:-2] + "h"))
-        all_files = os.listdir(p.parent)
+    # 2. Update includes in all .c and .h files (ONE pass)
+    for p in base.rglob("*"):
+        if p.suffix in {".c", ".h"}:
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            new_content = re.sub(r"#include <(.*)\.ch>", r"#include <\1.h>", content)
+            new_content = re.sub(r'#include "(.*)\.ch"', r'#include "\1.h"', new_content)
+            if new_content != content:
+                p.write_text(new_content, encoding="utf-8", newline="\n")
 
-        # edit source files to include .h files instead
-        for file in all_files:
-            with open(p.parent / file, "rb") as f:
-                content = f.read().decode("utf-8", "ignore")
-            content = re.sub(r"#include <(.*).ch>", r"#include <\1.h>", content)
-            content = re.sub(r'#include "(.*).ch"', r'#include "\1.h"', content)
-            with open(p.parent / file, "w") as f:
-                f.write(content)
-    logger.info(" Complete")
+def _replace_urng_default() -> None:
+    logger.info(" Replacing URNG API")
+    base_dir = pathlib.Path(__file__).parent
+    unuran_src = base_dir / "unuran" / "src"
+    
+    # Copy modified urng_default
+    if (base_dir / "urng_default_mod.c").exists():
+        shutil.copy(base_dir / "urng_default_mod.c", unuran_src / "urng" / "urng_default.c")
 
+    # Update unuran.h
+    unuran_h = unuran_src / "unuran.h"
+    if unuran_h.exists():
+        content = unuran_h.read_text(encoding="utf-8", errors="ignore")
+        for h in ["urng_builtin.h", "urng_fvoid.h", "urng_randomshift.h"]:
+            content = re.sub(rf"/\* <1> `{h}\' \*/(.|\n)*/\* end of `{h}\' \*/", f"/* Removed {h} */", content)
+        unuran_h.write_text(content, encoding="utf-8", newline="\n")
 
-def _replace_urng_default(logger: logging.Logger) -> None:
-    # This is messy right now. But I am not sure if there is a good way
-    # to do this. We need to modify the urng_default file and some headers
-    # in unuran_config.h to remove the default URNG. The approach I have
-    # followed is: replace the file `urng_default.c` with a modified version
-    # `urng_default_mod.c`, then remove the declarations of default URNG from
-    # unuran.h, and finally replace some macros in unuran_config.h to not use
-    # the default RNG.
-    logger.info(" Replacing URNG API with a modified version for SciPy")
+    # Update unuran_config.h
+    cfg_h = unuran_src / "unuran_config.h"
+    if cfg_h.exists():
+        content = cfg_h.read_text(encoding="utf-8", errors="ignore")
+        content = re.sub(r"# *define *UNUR_URNG_DEFAULT *\(?unur_urng_builtin\(\)?\)", 
+                         "#define UNUR_URNG_DEFAULT unur_get_default_urng()", content)
+        content = re.sub(r"# *define *UNUR_URNG_AUX_DEFAULT *\(?unur_urng_builtin_aux\(\)?\)",
+                         "#define UNUR_URNG_AUX_DEFAULT unur_get_default_urng_aux()", content)
+        cfg_h.write_text(content, encoding="utf-8", newline="\n")
 
-    # Replace the file urng_default.c with urng_default_mod.c
-    basefile = pathlib.Path(".") / "urng_default_mod.c"
-    repfile = pathlib.Path(__file__).parent / "unuran" / "src" / "urng" / "urng_default.c"
-    shutil.copy(basefile, repfile)
-
-    # remove declarations of default URNG from unuran.h
-    removed_headers = [r"urng_builtin.h", r"urng_fvoid.h", r"urng_randomshift.h"]
-    with open(basefile.parent / "unuran" / "src" / "unuran.h", "rb") as f:
-        content = f.read().decode("utf-8", "ignore")
-    for header in removed_headers:
-        content = re.sub(rf"/\* <1> `{header}\' \*/(.|\n)*/\* end of `{header}\' \*/",
-                         rf"/* Removed `{header}' for use in SciPy */", content)
-    with open(basefile.parent / "unuran" / "src" / "unuran.h", "w") as f:
-        f.write(content)
-    with open(basefile.parent / "unuran" / "src" / "unuran_config.h", "rb") as f:
-        content = f.read().decode("utf-8", "ignore")
-
-    # replace macros in unuran_config.h to not use the default URNG.
-    content = re.sub(
-        r"# *define *UNUR_URNG_DEFAULT *\(?unur_urng_builtin\(\)?\)",
-        r"#define UNUR_URNG_DEFAULT unur_get_default_urng()",
-        content,
-    )
-    content = re.sub(
-        r"# *define *UNUR_URNG_AUX_DEFAULT *\(?unur_urng_builtin_aux\(\)?\)",
-        r"#define UNUR_URNG_AUX_DEFAULT unur_get_default_urng_aux()",
-        content,
-    )
-    with open(basefile.parent / "unuran" / "src" / "unuran_config.h", "w") as f:
-        f.write(content)
-    logger.info(" Complete")
-
-
-def _remove_misc(logger: logging.Logger):
-    logger.info(" Removing miscellaneous files...")
-    misc_files = [
-        "./*/*/*.pl",
-        "./*/*/*.in",
-        "./*/*/*.dh"
-    ]
+def _remove_misc():
+    logger.info(" Removing miscellaneous files")
     base = pathlib.Path(__file__).parent / "unuran"
-    for file in misc_files:
-        for p in base.glob(file):
-            logger.info(f"     Removing {str(p)}")
+    for ext in ["*.pl", "*.in", "*.dh"]:
+        for p in base.rglob(ext):
             p.unlink()
-    logger.info(" Complete")
-
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(__doc__)
-    parser.add_argument(
-        "--unuran-version",
-        type=str,
-        help="UNU.RAN version to download formatted as [major].[minor].[patch].",
-        default="1.8.1",
-    )
-    parser.add_argument(
-        "-v", action="store_true", help="Enable verbose logging.", default=False
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--unuran-version", type=str, default="1.8.1")
+    parser.add_argument("-v", action="store_true", default=False)
     args = parser.parse_args()
-    logger = logging.getLogger("get-and-clean-unuran")
+    
     if args.v:
         logger.setLevel(logging.INFO)
-    _download_unuran(version=args.unuran_version, logger=logger)
-    _clean_makefiles(logger)
-    _clean_deprecated(logger)
-    _ch_to_h(logger)
-    _replace_urng_default(logger)
-    _remove_misc(logger)
+
+    _download_unuran(args.unuran_version)
+    _clean_makefiles()
+    _clean_deprecated()
+    _ch_to_h()
+    _replace_urng_default()
+    _remove_misc()
+    _normalize_line_endings()
+    logger.info(" Done!")
