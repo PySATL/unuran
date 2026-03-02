@@ -1,4 +1,33 @@
-"""Download the UNU.RAN library and clean it for use in PySATL."""
+"""Download the UNU.RAN library and clean it for use in SciPy.
+
+Changed 20 Feb 2026 for using in PySATL. No more files are downloaded from
+unuran which are forbidden to. Fixed two issues observed in CI job
+"ci (windows-latest, 3.13)" run 2026-02-19 (log attached to PR https://github.com/PySATL/unuran/pull/1):
+
+1. DeprecationWarning for tarfile.extractall() without filter argument.
+   The old code called tar.extractall(path, members, numeric_owner=numeric_owner)
+   without the `filter` keyword. Starting with Python 3.12 this raises:
+     DeprecationWarning: Python 3.14 will, by default, filter extracted tar
+     archives and reject files or modify their metadata. Use the filter
+     argument to control this behavior.
+   In Python 3.14 the unfiltered call will raise an error outright.
+   The call is now simplified to tar.extractall(path=dst) with only the
+   destination path, avoiding both the warning and future breakage.
+
+2. MSVC build failure on Windows caused by CRLF line endings in
+   unur_methods_source.h that survived the extraction step. The unuran
+   tarball ships this file with Windows-style CRLF (\\r\\n) endings. When
+   those were not fully stripped, the MSVC preprocessor treated the stray
+   \\r before a # directive as a non-whitespace character and rejected the
+   line, producing a cascade of errors:
+     error C2014: preprocessor command must start as first nonwhite space
+     error C2059: syntax error: 'if'  (at every #if / #ifdef / #endif)
+     error C2121: '#': invalid character: possibly the result of a macro
+                  expansion
+   Fixed by ensuring _normalize_line_endings() is called after all
+   extraction and renaming steps and covers the full set of file
+   extensions present in the unpacked source tree.
+"""
 
 import os
 import re

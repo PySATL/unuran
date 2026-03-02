@@ -1,4 +1,26 @@
-"""Build helper: download -> meson setup -> meson compile."""
+"""Build the UNU.RAN C library for use in PySATL (https://github.com/PySATL/pysatl-core).
+
+Orchestrates the full build pipeline:
+  1. get_and_clean_unuran.py  — download the tarball, strip unneeded directories
+     (tests, docs, examples, src/uniform), rename .ch→.h, replace the URNG
+     back-end with the NumPy-compatible urng_default_mod.c, normalise line endings.
+  2. Write a stub config.h to satisfy ``#include <config.h>`` in the UNU.RAN
+     sources (all real defines are passed as Meson compiler flags).
+  3. meson setup <build_dir> && meson compile -C <build_dir>
+     Produces out/libunuran.a and out/libunuran.so / .dylib.
+
+Invoked automatically by _cffi_build.py (the Poetry build hook defined in
+pyproject.toml) when the compiled library is missing.  The CFFI extension
+_unuran_cffi, imported by pysatl_core.sampling.unuran, is then linked against
+the resulting library.
+
+Usage::
+
+    python build_unuran.py [--unuran-version VERSION] [--build-dir DIR]
+
+--unuran-version  UNU.RAN release to fetch (default: 1.11.0).
+--build-dir       Meson build directory relative to this file (default: out).
+"""
 
 from __future__ import annotations
 
